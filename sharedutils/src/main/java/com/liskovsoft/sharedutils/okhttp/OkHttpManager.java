@@ -25,7 +25,9 @@ public class OkHttpManager {
     }
 
     public static OkHttpManager instance() {
-        return instance(true); // profiler is enabled by default
+        // Profiler disabled by default (see OkHttpCommons.enableProfiler): it only feeds an
+        // Android-Studio plugin while flooding debug logcat. Pass true explicitly to re-enable.
+        return instance(false);
     }
 
     public static OkHttpManager instance(boolean enableProfiler) {

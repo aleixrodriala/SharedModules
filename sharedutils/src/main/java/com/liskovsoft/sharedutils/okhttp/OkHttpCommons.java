@@ -43,7 +43,12 @@ final class OkHttpCommons {
     public static final long CONNECT_TIMEOUT_MS = 20_000;
     public static final long READ_TIMEOUT_MS = 20_000;
     public static final long WRITE_TIMEOUT_MS = 20_000;
-    public static boolean enableProfiler = true;
+    // Default changed to false: the OkHttpProfilerInterceptor feeds an Android-Studio plugin and
+    // floods debug logcat (~18.5k OKPRFL lines/session) with in-code slowdown/OOM warnings.
+    // Still public static so it can be re-enabled at runtime when the plugin is actually in use.
+    // NOTE: OkHttpManager.getClient() overwrites this with its own flag; its no-arg instance()
+    // default was flipped to false in the same change.
+    public static boolean enableProfiler = false;
     // NEWTUBE(mobile): let clients negotiate HTTP/2 again. The HTTP/1.1 pin below dodges a
     // StreamResetException seen on old TV boxes' interrupt/create-stream patterns; on phones the
     // pin just costs every API call multiplexing and connection reuse (the media path already
