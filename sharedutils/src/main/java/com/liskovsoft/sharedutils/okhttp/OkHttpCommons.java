@@ -345,7 +345,10 @@ final class OkHttpCommons {
 
     private static void addLogger(OkHttpClient.Builder okBuilder) {
         HttpLoggingInterceptor logging = new HttpLoggingInterceptor();
-        logging.setLevel(HttpLoggingInterceptor.Level.BODY);
+        // BASIC (was BODY): BODY dumped the full multi-hundred-KB player/next JSON per request,
+        // drowning debug logcat and costing real time on every response. BASIC keeps the useful
+        // line (method/url/code/size/duration) per request.
+        logging.setLevel(HttpLoggingInterceptor.Level.BASIC);
         okBuilder.addInterceptor(logging);
     }
 
