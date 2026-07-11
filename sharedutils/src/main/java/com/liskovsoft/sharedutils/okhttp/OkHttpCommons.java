@@ -44,6 +44,12 @@ final class OkHttpCommons {
     public static final long READ_TIMEOUT_MS = 20_000;
     public static final long WRITE_TIMEOUT_MS = 20_000;
     public static boolean enableProfiler = true;
+    // NEWTUBE(mobile): let clients negotiate HTTP/2 again. The HTTP/1.1 pin below dodges a
+    // StreamResetException seen on old TV boxes' interrupt/create-stream patterns; on phones the
+    // pin just costs every API call multiplexing and connection reuse (the media path already
+    // runs H2/QUIC via Cronet). Set via OkHttpManager.setPreferHttp2 BEFORE the first client is
+    // built. Default OFF = TV behavior unchanged.
+    static boolean preferHttp2;
 
     private OkHttpCommons() {
 
@@ -259,6 +265,10 @@ final class OkHttpCommons {
      * https://github.com/square/okhttp/issues/3955
      */
     private static void fixStreamResetError(Builder okBuilder) {
+        if (preferHttp2) {
+            return; // NEWTUBE(mobile): keep OkHttp's default ALPN negotiation (H2 + HTTP/1.1)
+        }
+
         okBuilder.protocols(Collections.singletonList(Protocol.HTTP_1_1));
     }
 

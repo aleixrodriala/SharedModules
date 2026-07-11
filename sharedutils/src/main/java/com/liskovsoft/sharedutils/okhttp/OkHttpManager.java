@@ -40,6 +40,11 @@ public class OkHttpManager {
         sInstance = null;
     }
 
+    /** NEWTUBE(mobile): see {@link OkHttpCommons#preferHttp2}. Call before the first client is built. */
+    public static void setPreferHttp2(boolean preferHttp2) {
+        OkHttpCommons.preferHttp2 = preferHttp2;
+    }
+
     public Response doRequest(String url) {
         return doRequest(url, getClient());
     }
