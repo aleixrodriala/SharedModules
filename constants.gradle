@@ -1,8 +1,7 @@
 project.ext {
-    // ExoPlayer (Android Codec APIs) requires API 16+
-    // Leanback requires API 17+
-    // j2v8 6.2.1 requires API 18+
-    minSdkVersion = 17
+    // NEWTUBE(phone-only): minSdk 24 - media3 1.10.x floor is 23, and 24 gives native
+    // multidex + default interface methods without desugaring the min-api warning away.
+    minSdkVersion = 24
     // Fix AppSettingsActivity crash: "Only fullscreen opaque activities can request orientation".
     // Error happen only on Android 8.0 (api 26) when you set activity orientation in manifest.
     // Possible fix is to set targetSdkVersion to 26.
@@ -19,21 +18,22 @@ project.ext {
     // - No popup notifications
     // - Backup/restore can access to the external directory
     // - Disabled auto start of the background service (e.g. remote control service)
-    targetSdkVersion = 27 // 29 latest with lecacy storage access, 27 - latest with mouse dpad emulaton
-    compileSdkVersion = 34
-    buildToolsVersion = '30.0.3'
+    // NEWTUBE(phone-only): targetSdk 35 (Android 15) - Play-store-current; enables
+    // edge-to-edge enforcement on Android 15+. The old TV-centric 27 pin is history.
+    targetSdkVersion = 35
+    compileSdkVersion = 36
+    // buildToolsVersion is gone - AGP 8 auto-selects its own build-tools.
     //gradleVersion = '6.9.1' // https://developer.android.com/studio/releases/gradle-plugin#updating-gradle
     //androidGradleVersion = '4.0.0+' // last version compatible with IntellJ 2020.3
-    
+
     testSupportVersion = '0.5'
     testXSupportVersion = '1.1.0'
-    kotlinVersion = '1.8.10' // latest for android-gradle 4.0.0 https://mvnrepository.com/artifact/org.jetbrains.kotlin/kotlin-stdlib-jdk7
-    kotlinxVersion = '1.7.3' // https://mvnrepository.com/artifact/org.jetbrains.kotlinx/kotlinx-coroutines-android
+    kotlinVersion = '2.1.20' // paired with AGP 8.9.x / Gradle 8.11.1
+    kotlinxVersion = '1.9.0' // https://mvnrepository.com/artifact/org.jetbrains.kotlinx/kotlinx-coroutines-android
     // NOTE: Kotlin core 1.7.0 has 'resource android:attr/lStar not found' error (dialog black background bug)
     kotlinCoreXVersion = '1.12.0' // latest for sdk 17. https://mvnrepository.com/artifact/androidx.core/core-ktx
     coreXVersion = '1.9.0' // the latest compatible with kotlin core and cronet 119
     appCompatXVersion = '1.2.0' // old: 1.0.0
-    leanbackXVersion = '1.0.0'
     viewpagerXVersion = '1.0.0'
     activityXVersion = '1.0.0'
     loaderXVersion = '1.0.0'
@@ -89,7 +89,6 @@ project.ext {
     okioVersion = '2.10.0' // Old
     // okioVersion = '3.0.0-alpha.4'
     
-    multiDexVersion = '2.0.1' // crashlytics fix on Android 4.4
     stethoVersion = '1.5.0' // Chrome Dev Tools
     glideVersion = '4.11.0'
     webpDecoderVersion = '2.0.' + glideVersion // should end with glide version

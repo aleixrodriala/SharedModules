@@ -2,8 +2,9 @@ apply from: '../constants.gradle'
 apply plugin: 'com.android.library'
 
 android {
+    namespace 'com.eclipsesource.v8'
+
     compileSdkVersion project.ext.compileSdkVersion
-    buildToolsVersion project.ext.buildToolsVersion
     testOptions.unitTests.includeAndroidResources = true
 
     compileOptions {
@@ -18,8 +19,6 @@ android {
         versionName "6.2.1"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-
-        multiDexEnabled = true
 
         //ndkVersion "21.0.6113669"
     }

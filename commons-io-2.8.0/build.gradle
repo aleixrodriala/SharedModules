@@ -2,6 +2,8 @@ apply from: '../constants.gradle'
 apply plugin: 'com.android.library'
 
 android {
+    namespace 'org.apache.commons.commonsio'
+
     // FIX: Default interface methods are only supported starting with Android N (--min-api 24)
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
@@ -12,7 +14,6 @@ android {
     //publishNonDefault true
 
     compileSdkVersion project.properties.compileSdkVersion
-    buildToolsVersion project.properties.buildToolsVersion
 
     defaultConfig {
         minSdkVersion project.properties.minSdkVersion
@@ -20,10 +21,10 @@ android {
         versionCode 10
         versionName "1.0.1"
 
-        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
     }
-    
+
     buildTypes {
         release {
             minifyEnabled false
@@ -31,16 +32,14 @@ android {
         }
     }
 
-    lintOptions {
+    lint {
         abortOnError true
         lintConfig rootProject.file('lint.xml')
     }
 }
 
 dependencies {
-    androidTestImplementation('com.android.support.test.espresso:espresso-core:2.2.2', {
-        exclude group: 'com.android.support', module: 'support-annotations'
-    })
+    androidTestImplementation 'androidx.test.espresso:espresso-core:' + espressoVersion
     testImplementation 'org.apache.commons:commons-lang3:' + commonsLangVersion
     testImplementation 'com.google.jimfs:jimfs:' + jimfsVersion
     testImplementation 'junit:junit:' + junitVersion
