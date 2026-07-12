@@ -82,6 +82,13 @@ object CronetManager {
                                         "ms total=" + (metrics?.totalTimeMs ?: -1) +
                                         "ms rx=" + (metrics?.receivedByteCount ?: -1) +
                                         " reused=" + (if (metrics?.socketReused == true) "y" else "n") +
+                                        // googlevideo PO-token forensics: pot-less media URLs die
+                                        // at a ~60s-of-served-media grace wall on pot-enforcing
+                                        // (carrier CGNAT) networks - one glance tells whether the
+                                        // dying request even carried the token. Query form (pot=)
+                                        // on VOD format URLs; path form (/pot/) on live manifest +
+                                        // segment URLs.
+                                        " pot=" + (if (url.contains("pot=") || url.contains("/pot/")) "y" else "n") +
                                         " " + shortUrl)
                             } catch (e: Exception) {
                                 // observability must never break the transport
