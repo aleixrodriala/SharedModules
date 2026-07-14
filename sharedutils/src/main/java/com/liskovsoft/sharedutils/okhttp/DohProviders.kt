@@ -1,6 +1,7 @@
 package com.liskovsoft.sharedutils.okhttp
 
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.dnsoverhttps.DnsOverHttps
 import java.net.InetAddress
@@ -85,8 +86,7 @@ object DohProviders {
     }
 
     internal fun parseUrl(s: String): HttpUrl {
-
-        return HttpUrl.parse(s) ?: throw NullPointerException("unable to parse url")
+        return s.toHttpUrl()
     }
 
     private fun getByIp(host: String): InetAddress {

@@ -6,7 +6,6 @@ import com.liskovsoft.sharedutils.mylogger.Log
 import java.io.File
 import java.util.concurrent.Executors
 import org.chromium.net.CronetEngine
-import org.chromium.net.ExperimentalCronetEngine
 import org.chromium.net.RequestFinishedInfo
 import org.chromium.net.impl.NativeCronetProvider
 
@@ -61,7 +60,7 @@ object CronetManager {
                 // bytes, socket reuse. Answers "is googlevideo actually on QUIC / are connections
                 // reused across videos / did the cold start pay a handshake" without a debugger.
                 // Same debug detection as OkHttpCommons.debugSetup (sharedutils BuildConfig).
-                if (BuildConfig.DEBUG && built is ExperimentalCronetEngine) {
+                if (BuildConfig.DEBUG) {
                     val listenerExecutor = Executors.newSingleThreadExecutor { r ->
                         Thread(r, "CronetNetPath").apply { isDaemon = true }
                     }

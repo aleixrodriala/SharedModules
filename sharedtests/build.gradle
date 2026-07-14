@@ -2,19 +2,19 @@ apply from: '../constants.gradle'
 apply plugin: 'com.android.library'
 
 android {
-    namespace 'com.liskovsoft.sharedtests'
+    namespace = 'com.liskovsoft.sharedtests'
 
-    compileSdkVersion project.ext.compileSdkVersion
+    compileSdk = project.ext.compileSdkVersion
     testOptions.unitTests.includeAndroidResources = true
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
     defaultConfig {
-        minSdkVersion project.ext.minSdkVersion
-        targetSdkVersion project.ext.targetSdkVersion
+        minSdk = project.ext.minSdkVersion
+        targetSdk = project.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
 
@@ -25,13 +25,12 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
     lint {
-        abortOnError true
-        lintConfig rootProject.file('lint.xml')
+        abortOnError = true
     }
 }
 
