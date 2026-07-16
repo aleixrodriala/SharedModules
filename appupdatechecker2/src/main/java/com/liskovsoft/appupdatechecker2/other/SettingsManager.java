@@ -5,7 +5,10 @@ import android.content.SharedPreferences;
 import com.liskovsoft.sharedutils.mylogger.Log;
 
 public class SettingsManager {
-    public static final long CHECK_INTERVAL_DEFAULT_MS = 60 * 1_000;
+    public static final long CHECK_INTERVAL_DEFAULT_MS = 12 * 60 * 60 * 1_000L; // 12 hours
+    // Older builds persisted this literal default into the interval pref whenever the
+    // user toggled update checks on; it is migrated to the current default on read.
+    private static final long LEGACY_CHECK_INTERVAL_DEFAULT_MS = 60 * 1_000; // 60 seconds
     private static final String TAG = SettingsManager.class.getSimpleName();
     private static final String SHARED_PREFERENCES_NAME = "com.liskovsoft.appupdatechecker2.preferences";
     private static final String PREF_CHECK_INTERVAL_MS = "check_interval_ms";
@@ -63,7 +66,21 @@ public class SettingsManager {
 
     public long getMinIntervalMs() {
         String interval = mPrefs.getString(PREF_CHECK_INTERVAL_MS, null);
-        return interval != null ? Long.parseLong(interval) : CHECK_INTERVAL_DEFAULT_MS;
+
+        if (interval == null) {
+            return CHECK_INTERVAL_DEFAULT_MS;
+        }
+
+        long value = Long.parseLong(interval);
+
+        // One-shot migration: rewrite the stale 60s default so the interval actually
+        // throttles. Disabled (negative) and any custom value are left untouched.
+        if (value == LEGACY_CHECK_INTERVAL_DEFAULT_MS) {
+            setMinIntervalMs(CHECK_INTERVAL_DEFAULT_MS);
+            return CHECK_INTERVAL_DEFAULT_MS;
+        }
+
+        return value;
     }
 
     public void setMinIntervalMs(long milliseconds) {

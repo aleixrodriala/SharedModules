@@ -17,7 +17,6 @@ import java.util.List;
 
 public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloaderListener {
     private static final String TAG = AppUpdateChecker.class.getSimpleName();
-    private static final int FRESH_TIME_MS = 15 * 60 * 1_000; // 15 minutes
     private static final int MIN_APK_SIZE_BYTES = 1_000_000; // 1 MB
     private final Context mContext;
     private final AppVersionChecker mVersionChecker;
@@ -107,24 +106,30 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
 
     @Override
     public void onChangelogReceived(boolean isLatestVersion, String latestVersionName, int latestVersionNumber, List<String> changelog, Uri[] downloadUris) {
+        // A successful manifest fetch/parse always reaches here (errors go to
+        // onCheckError), so record the check time for BOTH branches — otherwise the
+        // interval never throttles while an update is pending and we recheck every launch.
+        mSettingsManager.setLastCheckedMs(System.currentTimeMillis());
+
         if (!isLatestVersion) {
             if (downloadUris != null) {
                 mChangeLog = changelog;
                 mLatestVersionName = latestVersionName;
                 mLatestVersionNumber = latestVersionNumber;
 
+                // Reuse the already-downloaded apk if it is a complete package for the
+                // advertised version. isInProgress() guards against reading the file
+                // while a concurrent download is writing to the same path.
                 if (latestVersionNumber == mSettingsManager.getLatestVersionNumber() &&
-                        checkApk(mSettingsManager.getApkPath())) {
+                        !mDownloader.isInProgress() &&
+                        checkApk(mSettingsManager.getApkPath(), latestVersionNumber)) {
                     mListener.onUpdateFound(latestVersionName, changelog, mSettingsManager.getApkPath());
                 } else {
                     mDownloader.download(downloadUris);
                 }
             }
         } else {
-            // No update is needed.
-            mSettingsManager.setLastCheckedMs(System.currentTimeMillis());
-
-            // Remove old apks.
+            // No update is needed. Remove old apks.
             FileHelpers.delete(mSettingsManager.getApkPath());
 
             mListener.onUpdateError(new IllegalStateException(AppUpdateCheckerListener.LATEST_VERSION));
@@ -133,7 +138,7 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
 
     @Override
     public void onApkDownloaded(String path) {
-        if (!checkApk(path)) {
+        if (!checkApk(path, mLatestVersionNumber)) {
             return;
         }
 
@@ -149,7 +154,28 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
 
     @Override
     public void onCheckError(Exception e) {
+        // A definitive server answer (404 manifest = nothing published, malformed JSON) is
+        // throttled like a completed check — without this an unpublished manifest re-fires the
+        // GET on every splash. Connectivity-class failures don't stamp the clock: an offline or
+        // flaky launch should retry on the next one. DownloadManager wraps transport exceptions
+        // in IllegalStateException with the cause preserved, so walk the chain.
+        if (!isConnectivityError(e)) {
+            mSettingsManager.setLastCheckedMs(System.currentTimeMillis());
+        }
         mListener.onUpdateError(e);
+    }
+
+    private static boolean isConnectivityError(Throwable e) {
+        while (e != null) {
+            if (e instanceof java.net.SocketException
+                    || e instanceof java.net.UnknownHostException
+                    || e instanceof java.io.InterruptedIOException
+                    || e instanceof javax.net.ssl.SSLException) {
+                return true;
+            }
+            e = e.getCause();
+        }
+        return false;
     }
 
     @Override
@@ -194,14 +220,21 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
     }
 
     /**
-     * Checks the package is not broken
+     * Verifies the cached apk is a complete, parseable package for this app at the
+     * expected version. A truncated/partial download makes getPackageArchiveInfo()
+     * return null, so a non-null result for our package at the advertised versionCode
+     * proves the apk is fully downloaded and current — no time-based freshness
+     * heuristic is needed (which used to force a full re-download every 15 minutes).
      */
     @SuppressWarnings("deprecation")
-    private boolean checkApk(String path) {
-        if (!FileHelpers.isFreshFile(path, FRESH_TIME_MS)) {
+    private boolean checkApk(String path, int expectedVersionNumber) {
+        if (path == null) {
             return false;
         }
+
         PackageInfo archInfo = mContext.getPackageManager().getPackageArchiveInfo(path, 0);
-        return archInfo != null && mContext.getPackageName().equals(archInfo.packageName);
+        return archInfo != null
+                && mContext.getPackageName().equals(archInfo.packageName)
+                && archInfo.versionCode == expectedVersionNumber;
     }
 }
