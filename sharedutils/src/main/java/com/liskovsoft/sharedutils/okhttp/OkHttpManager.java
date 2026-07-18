@@ -30,7 +30,8 @@ public class OkHttpManager {
         return instance(false);
     }
 
-    public static OkHttpManager instance(boolean enableProfiler) {
+    // NEWTUBE: synchronized for the same preconnect-vs-first-API-call race as getClient().
+    public static synchronized OkHttpManager instance(boolean enableProfiler) {
         if (sInstance == null) {
             sInstance = new OkHttpManager(enableProfiler);
         }
@@ -70,6 +71,18 @@ public class OkHttpManager {
 
     public Response doHeadRequest(String url) {
         return doHeadRequest(url, getClient());
+    }
+
+    /**
+     * NEWTUBE(mobile): fire a HEAD purely to establish the pooled DNS+TCP+TLS connection and
+     * release it straight back (void so callers without okhttp on their classpath can use it).
+     * Throws like the other do*Request helpers on network failure.
+     */
+    public void warmUpConnection(String url) {
+        Response response = doHeadRequest(url);
+        if (response != null) {
+            response.close();
+        }
     }
 
     /**
@@ -150,7 +163,10 @@ public class OkHttpManager {
         }
     }
 
-    public OkHttpClient getClient() {
+    // NEWTUBE: synchronized — the app-start preconnect thread (MobileMainApplication) races the
+    // first API call here; an unsynchronized double-build would give them separate connection
+    // pools, so the warmed connection would never be the one the API client reuses.
+    public synchronized OkHttpClient getClient() {
         if (mClient == null) {
             OkHttpCommons.enableProfiler = mEnableProfiler;
             mClient = OkHttpCommons.setupBuilder(new OkHttpClient.Builder()).build();
