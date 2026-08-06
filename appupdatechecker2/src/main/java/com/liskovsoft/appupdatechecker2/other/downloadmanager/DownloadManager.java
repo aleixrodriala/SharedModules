@@ -157,7 +157,11 @@ public final class DownloadManager {
         //
         //OkHttpCommons.setupBuilder(builder);
 
-        Builder builder = OkHttpManager.instance().getClient().newBuilder()
+        // Streaming variant: the shared client now carries a 45s callTimeout (a total bound, so a
+        // dribbling link can no longer hang a request forever). An APK is tens of MB and legitimately
+        // takes longer than that on any ordinary mobile link, so the download takes the exempt
+        // client - same pool and config, no total bound.
+        Builder builder = OkHttpManager.instance().getStreamingClient().newBuilder()
                 .addNetworkInterceptor(intercept);
 
         return builder.build();

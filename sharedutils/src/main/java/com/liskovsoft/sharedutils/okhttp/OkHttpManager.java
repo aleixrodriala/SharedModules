@@ -13,11 +13,13 @@ import okhttp3.Response;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class OkHttpManager {
     private static final String TAG = OkHttpManager.class.getSimpleName();
     private static OkHttpManager sInstance;
     private OkHttpClient mClient;
+    private OkHttpClient mStreamingClient;
     private final boolean mEnableProfiler;
 
     private OkHttpManager(boolean enableProfiler) {
@@ -46,6 +48,28 @@ public class OkHttpManager {
     /** NEWTUBE(mobile): see {@link OkHttpCommons#preferHttp2}. Call before the first client is built. */
     public static void setPreferHttp2(boolean preferHttp2) {
         OkHttpCommons.preferHttp2 = preferHttp2;
+    }
+
+    /**
+     * NEWTUBE(mobile): drop every pooled connection.
+     *
+     * <p>Call when the DEFAULT NETWORK IS REPLACED (Wi-Fi to cellular and back). The sockets in the
+     * pool are bound to the old network: they are not reset, they are half-open, so the next API
+     * call picks one from the pool and waits out the full read timeout before OkHttp retries on a
+     * fresh connection - and with HTTP/2 every InnerTube call shares that one connection, so the
+     * whole UI stalls together. {@link okhttp3.ConnectionPool#evictAll()} closes idle connections
+     * and marks the in-flight ones "no new exchanges", so nothing in progress is cancelled.
+     *
+     * <p>One pool covers the app: RetrofitOkHttpHelper (InnerTube) and the other consumers derive
+     * their clients from this one with {@code newBuilder()}, which copies the pool REFERENCE.
+     *
+     * <p>Never builds a client: with no client yet there is nothing pooled to evict.
+     */
+    public static synchronized void evictConnections() {
+        OkHttpManager instance = sInstance;
+        if (instance != null) {
+            instance.evictPooledConnections();
+        }
     }
 
     public Response doRequest(String url) {
@@ -173,6 +197,36 @@ public class OkHttpManager {
         }
 
         return mClient;
+    }
+
+    /**
+     * NEWTUBE(mobile): the shared client MINUS the total-call bound, for transfers whose duration
+     * is set by the payload rather than by the server's responsiveness - the in-app APK download
+     * and the cast proxy's upstream media fetches. Everything else (pool, timeouts, interceptors,
+     * DNS, TLS) is identical, and the connection pool is shared, so
+     * {@link #evictConnections()} still covers it.
+     *
+     * <p>Without this, {@link OkHttpCommons#CALL_TIMEOUT_MS} would kill any transfer that legitimately
+     * runs past 45s - a ~60MB update APK does that on any ordinary mobile link.
+     */
+    public synchronized OkHttpClient getStreamingClient() {
+        if (mStreamingClient == null) {
+            mStreamingClient = getClient().newBuilder()
+                    .callTimeout(0, TimeUnit.MILLISECONDS) // 0 = no total bound
+                    .build();
+        }
+
+        return mStreamingClient;
+    }
+
+    private synchronized void evictPooledConnections() {
+        if (mClient == null) {
+            return;
+        }
+
+        int pooled = mClient.connectionPool().connectionCount();
+        mClient.connectionPool().evictAll();
+        Log.d(TAG, "Evicted %s pooled connection(s) after a network change", pooled);
     }
 
     public static long getConnectTimeoutMs() {
