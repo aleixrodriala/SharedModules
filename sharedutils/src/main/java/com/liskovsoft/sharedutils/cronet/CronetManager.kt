@@ -4,6 +4,7 @@ import android.content.Context
 import com.liskovsoft.sharedutils.BuildConfig
 import com.liskovsoft.sharedutils.mylogger.Log
 import java.io.File
+import java.util.Date
 import java.util.concurrent.Executors
 import org.chromium.net.CronetEngine
 import org.chromium.net.RequestFinishedInfo
@@ -43,9 +44,10 @@ object CronetManager {
 
         try {
             val builder = NativeCronetProvider(context.applicationContext).createBuilder()
+            val quicEnabled = !BuildConfig.DEBUG || debugProperty("debug.arc.cronet_quic") != "off"
 
             builder
-                .enableQuic(true)
+                .enableQuic(quicEnabled)
                 .enableHttp2(true)
                 .enableBrotli(true)
 
@@ -92,6 +94,13 @@ object CronetManager {
                                     "ms total=" + (metrics?.totalTimeMs ?: -1) +
                                     "ms rx=" + (metrics?.receivedByteCount ?: -1) +
                                     " reused=" + (if (metrics?.socketReused == true) "y" else "n") +
+                                    " dns=" + elapsed(metrics?.dnsStart, metrics?.dnsEnd) +
+                                    // connect includes TLS where both phases are reported; these
+                                    // intervals overlap and must not be added together.
+                                    " connect=" + elapsed(metrics?.connectStart, metrics?.connectEnd) +
+                                    " tls=" + elapsed(metrics?.sslStart, metrics?.sslEnd) +
+                                    " requestWait=" + elapsed(metrics?.sendingEnd, metrics?.responseStart) +
+                                    " preDns=" + elapsed(metrics?.requestStart, metrics?.dnsStart) +
                                     // googlevideo PO-token forensics: pot-less media URLs die
                                     // at a ~60s-of-served-media grace wall on pot-enforcing
                                     // (carrier CGNAT) networks - one glance tells whether the
@@ -108,7 +117,8 @@ object CronetManager {
             }
 
             engine = built
-            android.util.Log.d(NETPATH_TAG, "cronet-init ready provider=native quic=y h2=y")
+            android.util.Log.d(NETPATH_TAG, "cronet-init ready provider=native quic=" +
+                    (if (quicEnabled) "y" else "n") + " h2=y impl=" + built.javaClass.simpleName)
         } catch (error: Throwable) {
             // LinkageError is the historical failure, but provider construction/build can also
             // throw RuntimeException on ABI/OEM/storage problems. Fail closed exactly once and let
@@ -123,6 +133,18 @@ object CronetManager {
         }
 
         return engine
+    }
+
+    private fun elapsed(start: Date?, end: Date?): Long =
+        if (start == null || end == null || end.before(start)) -1 else end.time - start.time
+
+    /** Debug-only transport comparison; never changes release behavior. Read at engine creation. */
+    private fun debugProperty(key: String): String = try {
+        Class.forName("android.os.SystemProperties")
+            .getMethod("get", String::class.java, String::class.java)
+            .invoke(null, key, "") as? String ?: ""
+    } catch (_: Exception) {
+        ""
     }
 
     private fun safeMessage(error: Throwable): String {
