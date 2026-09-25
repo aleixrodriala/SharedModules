@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
+import android.os.SystemClock;
 import com.liskovsoft.sharedutils.helpers.FileHelpers;
 import com.liskovsoft.sharedutils.helpers.MessageHelpers;
 import com.liskovsoft.sharedutils.mylogger.Log;
@@ -27,6 +28,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.util.HashMap;
@@ -58,7 +60,15 @@ public final class DownloadManager {
     private InputStream mResponseStream;
     private int mTotalLen = 0;
     private Uri mFileUri;
-    private static final long MAX_DOWN_TIME_MS = 60 * 1_000; // 1 minute
+    // NEWTUBE(update-stall): a download is abandoned when a whole window passes with (almost) no
+    // bytes, NOT after a fixed wall-clock budget. The old 60 s cap zeroed any APK download slower
+    // than ~9 Mbps and the caller deleted it, so a slow link re-downloaded the first 60 s of the
+    // APK on every check and never finished. A fully silent socket still fails on the read timeout.
+    static final long STALL_WINDOW_MS = 30 * 1_000;
+    static final long STALL_MIN_BYTES = 32 * 1024; // ~1 KB/s over the window
+    // NEWTUBE(update-metered): how often an automatic download re-checks for a metered network
+    static final long METERED_CHECK_INTERVAL_MS = 2_000;
+    public static final String METERED_MESSAGE = "Automatic update download skipped: metered network";
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36";
     private static final String ACCEPT_CONTENT = "*/*";
     private final Map<String, String> mHeaders = new HashMap<>();
@@ -76,6 +86,12 @@ public final class DownloadManager {
         }
 
         String url = mRequest.mDownloadUri.toString();
+
+        // NEWTUBE(update-metered): a download nobody asked for doesn't start on a metered network
+        if (!mRequest.isMeteredAllowed() && isActiveNetworkMetered(mContext)) {
+            android.util.Log.d("NetPath", "update-download skip reason=metered");
+            throw new IllegalStateException(METERED_MESSAGE);
+        }
 
         Log.d(TAG, "Starting download %s...", url);
 
@@ -175,25 +191,19 @@ public final class DownloadManager {
         FileOutputStream fos = null;
 
         try {
-            long downStartTimeMs = System.currentTimeMillis();
-
             fos = new FileOutputStream(destination.getPath());
 
-            byte[] buffer = new byte[1024];
-            int len1;
-            int totalLen = 0;
-            while ((len1 = is.read(buffer)) != -1) {
-                totalLen += len1;
-                fos.write(buffer, 0, len1);
+            // The probe is re-read on every check: a user-initiated re-check can lift the restriction
+            // mid-download, and the binder call is skipped entirely while metered is allowed.
+            Transfer transfer = copyGuarded(is, fos, SystemClock::elapsedRealtime,
+                    () -> !mRequest.isMeteredAllowed() && isActiveNetworkMetered(mContext));
 
-                if (System.currentTimeMillis() - downStartTimeMs > MAX_DOWN_TIME_MS) {
-                    // Oops. Downloading is taken too much time. Cancelling...
-                    totalLen = 0;
-                    break;
-                }
-            }
+            android.util.Log.d("NetPath", transfer.mAbortReason == null ?
+                    "update-download done bytes=" + transfer.mBytes + " ms=" + transfer.mElapsedMs :
+                    "update-download " + transfer.mAbortReason + " bytes=" + transfer.mBytes + " ms=" + transfer.mElapsedMs);
 
-            mTotalLen = totalLen;
+            // zero length = the caller discards the file
+            mTotalLen = transfer.mAbortReason == null ? (int) transfer.mBytes : 0;
         } catch (IOException ex) {
             throw new IllegalStateException(ex);
         } finally {
@@ -304,6 +314,128 @@ public final class DownloadManager {
         return activeNetworkInfo != null && activeNetworkInfo.isConnected();
     }
 
+    /**
+     * NEWTUBE(update-metered): cellular, a metered hotspot, or a Wi-Fi the user marked metered.
+     * Unknown (no service, no permission) counts as unmetered, i.e. the old behavior.
+     */
+    public static boolean isActiveNetworkMetered(Context context) {
+        try {
+            ConnectivityManager connectivityManager = context != null ?
+                    (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE) : null;
+            return connectivityManager != null && connectivityManager.isActiveNetworkMetered();
+        } catch (RuntimeException e) { // SecurityException without ACCESS_NETWORK_STATE
+            Log.e(TAG, "isActiveNetworkMetered: %s", e.getMessage());
+            return false;
+        }
+    }
+
+    interface Clock {
+        long nowMs();
+    }
+
+    interface MeteredProbe {
+        /** @return true if the transfer must stop because it would continue on a metered network */
+        boolean isMeteredBlocked();
+    }
+
+    /** Outcome of {@link #copyGuarded}. */
+    static final class Transfer {
+        static final String STALL = "stall";
+        static final String METERED = "abort reason=metered";
+        static final String METERED_AT_END = "reject reason=metered-at-end";
+        final long mBytes;
+        final long mElapsedMs;
+        /** null = complete */
+        final String mAbortReason;
+
+        Transfer(long bytes, long elapsedMs, String abortReason) {
+            mBytes = bytes;
+            mElapsedMs = elapsedMs;
+            mAbortReason = abortReason;
+        }
+    }
+
+    /**
+     * NEWTUBE(update-stall/update-metered): copies the body to the file under two guards - the
+     * progress watchdog, and (for a download nobody asked for) a metered check every
+     * {@link #METERED_CHECK_INTERVAL_MS} of transfer plus once more at the end, so a Wi-Fi ->
+     * cellular handover can't slip the rest of the APK through on the metered network.
+     */
+    static Transfer copyGuarded(InputStream is, OutputStream os, Clock clock, MeteredProbe meteredProbe) throws IOException {
+        long startMs = clock.nowMs();
+        StallWatch stallWatch = new StallWatch(STALL_WINDOW_MS, STALL_MIN_BYTES, startMs);
+        long nextMeteredCheckMs = startMs + METERED_CHECK_INTERVAL_MS;
+
+        byte[] buffer = new byte[1024];
+        int len;
+        long total = 0;
+
+        while ((len = is.read(buffer)) != -1) {
+            total += len;
+            os.write(buffer, 0, len);
+
+            long nowMs = clock.nowMs();
+
+            if (stallWatch.onBytes(len, nowMs) == StallWatch.STALLED) {
+                // Oops. Downloading has stalled. Cancelling...
+                return new Transfer(total, nowMs - startMs, Transfer.STALL);
+            }
+
+            // Wi-Fi -> cellular handover mid-download (a binder call: time-bounded, not per chunk)
+            if (nowMs >= nextMeteredCheckMs) {
+                nextMeteredCheckMs = nowMs + METERED_CHECK_INTERVAL_MS;
+
+                if (meteredProbe.isMeteredBlocked()) {
+                    return new Transfer(total, nowMs - startMs, Transfer.METERED);
+                }
+            }
+        }
+
+        long endMs = clock.nowMs();
+
+        // The tail may have arrived within one check interval of a handover
+        if (meteredProbe.isMeteredBlocked()) {
+            return new Transfer(total, endMs - startMs, Transfer.METERED_AT_END);
+        }
+
+        return new Transfer(total, endMs - startMs, null);
+    }
+
+    /**
+     * NEWTUBE(update-stall): progress watchdog. The transfer is stalled when a full window closes
+     * with fewer than {@code minBytes} received in it.
+     */
+    static final class StallWatch {
+        static final int OK = 0;
+        /** A window just closed and the transfer made enough progress in it. */
+        static final int WINDOW = 1;
+        static final int STALLED = 2;
+        private final long mWindowMs;
+        private final long mMinBytes;
+        private long mWindowStartMs;
+        private long mWindowBytes;
+
+        StallWatch(long windowMs, long minBytes, long nowMs) {
+            mWindowMs = windowMs;
+            mMinBytes = minBytes;
+            mWindowStartMs = nowMs;
+        }
+
+        int onBytes(long bytes, long nowMs) {
+            mWindowBytes += bytes;
+
+            if (nowMs - mWindowStartMs < mWindowMs) {
+                return OK;
+            }
+
+            boolean stalled = mWindowBytes < mMinBytes;
+            mWindowStartMs = nowMs;
+            mWindowBytes = 0;
+
+            return stalled ? STALLED : WINDOW;
+        }
+    }
+
     private static class ProgressResponseBody extends ResponseBody {
 
         private final ResponseBody responseBody;
@@ -362,9 +494,22 @@ public final class DownloadManager {
         private final Uri mDownloadUri;
         private Uri mDestinationUri;
         private ProgressListener mProgressListener;
+        private volatile boolean mAllowMetered = true;
 
         public MyRequest(Uri uri) {
             mDownloadUri = uri;
+        }
+
+        /**
+         * NEWTUBE(update-metered): false = refuse to start, and stop at the next progress window,
+         * while the active network is metered. Can be flipped to true mid-download (the user asked).
+         */
+        public void setAllowMetered(boolean allow) {
+            mAllowMetered = allow;
+        }
+
+        public boolean isMeteredAllowed() {
+            return mAllowMetered;
         }
 
         public void setDestinationUri(Uri uri) {

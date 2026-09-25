@@ -8,6 +8,7 @@ import com.liskovsoft.appupdatechecker2.core.AppDownloaderListener;
 import com.liskovsoft.appupdatechecker2.core.AppVersionChecker;
 import com.liskovsoft.appupdatechecker2.core.AppVersionCheckerListener;
 import com.liskovsoft.appupdatechecker2.other.SettingsManager;
+import com.liskovsoft.appupdatechecker2.other.downloadmanager.DownloadManager;
 import com.liskovsoft.sharedutils.helpers.FileHelpers;
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.sharedutils.mylogger.Log;
@@ -18,6 +19,9 @@ import java.util.List;
 public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloaderListener {
     private static final String TAG = AppUpdateChecker.class.getSimpleName();
     private static final int MIN_APK_SIZE_BYTES = 1_000_000; // 1 MB
+    // NEWTUBE(update-metered): an automatic check that found an update on a metered network looks
+    // again after this long (the manifest is small), instead of after the full check interval.
+    private static final long METERED_RECHECK_MS = 60 * 60 * 1_000L; // 1 hour
     private final Context mContext;
     private final AppVersionChecker mVersionChecker;
     private final AppDownloader mDownloader;
@@ -26,6 +30,10 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
     private List<String> mChangeLog;
     private String mLatestVersionName;
     private int mLatestVersionNumber;
+    // NEWTUBE(update-metered): the user asked (forceCheckForUpdates) during the check in flight - also
+    // when their request was folded into an automatic check already running. Consumed by the result.
+    // Only a user-initiated check may download the APK on a metered network.
+    private volatile boolean mIsUserInitiated;
 
     public AppUpdateChecker(Context context, AppUpdateCheckerListener listener) {
         this(context, listener, MIN_APK_SIZE_BYTES);
@@ -79,6 +87,7 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
     }
 
     public void forceCheckForUpdates(String[] updateManifestUrls) {
+        mIsUserInitiated = true;
         checkForUpdatesInt(updateManifestUrls);
     }
 
@@ -111,6 +120,9 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
         // interval never throttles while an update is pending and we recheck every launch.
         mSettingsManager.setLastCheckedMs(System.currentTimeMillis());
 
+        boolean userInitiated = mIsUserInitiated;
+        mIsUserInitiated = false;
+
         if (!isLatestVersion) {
             if (downloadUris != null) {
                 mChangeLog = changelog;
@@ -124,8 +136,13 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
                         !mDownloader.isInProgress() &&
                         checkApk(mSettingsManager.getApkPath(), latestVersionNumber)) {
                     mListener.onUpdateFound(latestVersionName, changelog, mSettingsManager.getApkPath());
+                } else if (!userInitiated && DownloadManager.isActiveNetworkMetered(mContext)) {
+                    // NEWTUBE(update-metered): the automatic check would pull a ~65 MB APK before the
+                    // user agreed to anything. Defer it off the metered network; a user-initiated
+                    // check still downloads right away.
+                    deferMeteredDownload(latestVersionName);
                 } else {
-                    mDownloader.download(downloadUris);
+                    mDownloader.download(downloadUris, userInitiated);
                 }
             }
         } else {
@@ -134,6 +151,19 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
 
             mListener.onUpdateError(new IllegalStateException(AppUpdateCheckerListener.LATEST_VERSION));
         }
+    }
+
+    private void deferMeteredDownload(String latestVersionName) {
+        long intervalMs = mSettingsManager.getMinIntervalMs();
+
+        if (intervalMs > METERED_RECHECK_MS) {
+            // Stale again in METERED_RECHECK_MS rather than in a full interval
+            mSettingsManager.setLastCheckedMs(System.currentTimeMillis() - intervalMs + METERED_RECHECK_MS);
+        }
+
+        android.util.Log.d("NetPath", "update-download deferred reason=metered version=" + latestVersionName
+                + " recheck-in=" + METERED_RECHECK_MS / 60_000 + "min");
+        mListener.onUpdateError(new IllegalStateException(DownloadManager.METERED_MESSAGE));
     }
 
     @Override
@@ -162,6 +192,7 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
         if (!isConnectivityError(e)) {
             mSettingsManager.setLastCheckedMs(System.currentTimeMillis());
         }
+        mIsUserInitiated = false;
         mListener.onUpdateError(e);
     }
 
