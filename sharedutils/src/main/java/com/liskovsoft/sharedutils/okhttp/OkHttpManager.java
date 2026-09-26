@@ -46,8 +46,16 @@ public class OkHttpManager {
     }
 
     /** NEWTUBE(mobile): see {@link OkHttpCommons#preferHttp2}. Call before the first client is built. */
-    public static void setPreferHttp2(boolean preferHttp2) {
+    public static synchronized void setPreferHttp2(boolean preferHttp2) {
         OkHttpCommons.preferHttp2 = preferHttp2;
+        // A late call is silently a no-op (the built client and every newBuilder() copy keep the
+        // old protocol list). That happened once and pinned all InnerTube traffic to HTTP/1.1 for
+        // a whole round; say so loudly instead.
+        OkHttpManager instance = sInstance;
+        if (instance != null && instance.mClient != null) {
+            android.util.Log.w("NetPath", "api-client prefer-http2=" + preferHttp2
+                    + " IGNORED: client already built with protocols=" + instance.mClient.protocols());
+        }
     }
 
     /**
