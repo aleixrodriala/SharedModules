@@ -42,6 +42,8 @@ android {
 dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:' + espressoVersion
     testImplementation 'junit:junit:' + junitVersion
+    // NEWTUBE(update-flow): the real org.json for UpdateManifestTest (android.jar only has stubs)
+    testImplementation 'org.json:json:20240303'
 
     // Removed melautils.jar - only StreamUtils was used, now provided as source
     // See: src/main/java/edu/mit/mobile/android/utils/StreamUtils.java

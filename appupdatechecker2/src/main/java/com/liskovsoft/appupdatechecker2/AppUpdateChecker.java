@@ -2,17 +2,20 @@ package com.liskovsoft.appupdatechecker2;
 
 import android.content.Context;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.net.Uri;
 import com.liskovsoft.appupdatechecker2.core.AppDownloader;
 import com.liskovsoft.appupdatechecker2.core.AppDownloaderListener;
 import com.liskovsoft.appupdatechecker2.core.AppVersionChecker;
 import com.liskovsoft.appupdatechecker2.core.AppVersionCheckerListener;
+import com.liskovsoft.appupdatechecker2.core.UpdateManifest;
 import com.liskovsoft.appupdatechecker2.other.SettingsManager;
 import com.liskovsoft.appupdatechecker2.other.downloadmanager.DownloadManager;
 import com.liskovsoft.sharedutils.helpers.FileHelpers;
 import com.liskovsoft.sharedutils.helpers.Helpers;
 import com.liskovsoft.sharedutils.mylogger.Log;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -30,6 +33,10 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
     private List<String> mChangeLog;
     private String mLatestVersionName;
     private int mLatestVersionNumber;
+    // NEWTUBE(update-flow): what the last check found, for downloadUpdate() and the update screen
+    private Uri[] mDownloadUris;
+    private long mDownloadSize = -1;
+    private boolean mDownloadOnCheck = true;
     // NEWTUBE(update-metered): the user asked (forceCheckForUpdates) during the check in flight - also
     // when their request was folded into an automatic check already running. Consumed by the result.
     // Only a user-initiated check may download the APK on a metered network.
@@ -91,6 +98,65 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
         checkForUpdatesInt(updateManifestUrls);
     }
 
+    /**
+     * NEWTUBE(update-flow): false = a check only reads the manifest and reports a newer version
+     * through {@link AppUpdateCheckerListener#onUpdateAvailable}; the APK is fetched when the user
+     * asks ({@link #downloadUpdate()}), with progress. true (the default) = the old behaviour: the
+     * check downloads the APK first and reports it through onUpdateFound.
+     */
+    public void setDownloadOnCheck(boolean downloadOnCheck) {
+        mDownloadOnCheck = downloadOnCheck;
+    }
+
+    /**
+     * NEWTUBE(update-flow): downloads the version the last check found. Ends in
+     * {@link AppUpdateCheckerListener#onUpdateFound} or {@link AppUpdateCheckerListener#onDownloadError}.
+     */
+    public void downloadUpdate() {
+        if (mDownloadUris == null || mDownloadUris.length == 0) {
+            mListener.onDownloadError(new IllegalStateException("No update to download"));
+            return;
+        }
+
+        mDownloader.download(mDownloadUris, true);
+    }
+
+    /** NEWTUBE(update-flow): stops {@link #downloadUpdate()}; it then ends in onDownloadError. */
+    public void cancelDownload() {
+        mDownloader.cancel();
+    }
+
+    public boolean isDownloading() {
+        return mDownloader.isInProgress();
+    }
+
+    /**
+     * NEWTUBE(update-flow): the APK an earlier download left behind, when it is still a complete
+     * package of a version newer than the installed one - so a restarted app can offer Install
+     * without the network. Parses the APK: call it when the answer is needed, not at startup.
+     * The notes are the caller's to fill in. Null when there is none.
+     */
+    public UpdateInfo getDownloadedUpdate() {
+        int versionCode = mSettingsManager.getLatestVersionNumber();
+        String path = mSettingsManager.getApkPath();
+
+        if (versionCode <= getInstalledVersionCode() || mDownloader.isInProgress() || !checkApk(path, versionCode)) {
+            return null;
+        }
+
+        return new UpdateInfo(mSettingsManager.getLatestVersionName(), versionCode, null, null, -1, path);
+    }
+
+    /** NEWTUBE(update-flow): drops the downloaded APK once its version (or a newer one) is installed. */
+    public void discardInstalledUpdate() {
+        String path = mSettingsManager.getApkPath();
+
+        if (path != null && !mDownloader.isInProgress()
+                && mSettingsManager.getLatestVersionNumber() <= getInstalledVersionCode()) {
+            FileHelpers.delete(path);
+        }
+    }
+
     private void checkForUpdatesInt(String[] updateManifestUrls) {
         if (!checkPostponed()) {
             Uri[] uris = new Uri[updateManifestUrls.length];
@@ -114,7 +180,7 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
     }
 
     @Override
-    public void onChangelogReceived(boolean isLatestVersion, String latestVersionName, int latestVersionNumber, List<String> changelog, Uri[] downloadUris) {
+    public void onManifestReceived(UpdateManifest manifest, Uri[] downloadUris) {
         // A successful manifest fetch/parse always reaches here (errors go to
         // onCheckError), so record the check time for BOTH branches — otherwise the
         // interval never throttles while an update is pending and we recheck every launch.
@@ -123,24 +189,36 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
         boolean userInitiated = mIsUserInitiated;
         mIsUserInitiated = false;
 
-        if (!isLatestVersion) {
+        int installedVersion = getInstalledVersionCode();
+        List<ReleaseNotes> newReleases = manifest.newerThan(installedVersion);
+        ReleaseNotes latest = manifest.latest();
+        UpdateInfo info = new UpdateInfo(latest.versionName, latest.versionCode, newReleases,
+                manifest.find(installedVersion), manifest.downloadSize, null);
+
+        if (!newReleases.isEmpty()) {
             if (downloadUris != null) {
-                mChangeLog = changelog;
-                mLatestVersionName = latestVersionName;
-                mLatestVersionNumber = latestVersionNumber;
+                mChangeLog = flatten(newReleases);
+                mLatestVersionName = latest.versionName;
+                mLatestVersionNumber = latest.versionCode;
+                mDownloadUris = downloadUris;
+                mDownloadSize = manifest.downloadSize;
 
                 // Reuse the already-downloaded apk if it is a complete package for the
                 // advertised version. isInProgress() guards against reading the file
                 // while a concurrent download is writing to the same path.
-                if (latestVersionNumber == mSettingsManager.getLatestVersionNumber() &&
+                boolean apkReady = latest.versionCode == mSettingsManager.getLatestVersionNumber() &&
                         !mDownloader.isInProgress() &&
-                        checkApk(mSettingsManager.getApkPath(), latestVersionNumber)) {
-                    mListener.onUpdateFound(latestVersionName, changelog, mSettingsManager.getApkPath());
+                        checkApk(mSettingsManager.getApkPath(), latest.versionCode);
+
+                if (!mDownloadOnCheck) {
+                    mListener.onUpdateAvailable(apkReady ? info.withApkPath(mSettingsManager.getApkPath()) : info);
+                } else if (apkReady) {
+                    mListener.onUpdateFound(latest.versionName, mChangeLog, mSettingsManager.getApkPath());
                 } else if (!userInitiated && DownloadManager.isActiveNetworkMetered(mContext)) {
                     // NEWTUBE(update-metered): the automatic check would pull a ~65 MB APK before the
                     // user agreed to anything. Defer it off the metered network; a user-initiated
                     // check still downloads right away.
-                    deferMeteredDownload(latestVersionName);
+                    deferMeteredDownload(latest.versionName);
                 } else {
                     mDownloader.download(downloadUris, userInitiated);
                 }
@@ -149,7 +227,26 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
             // No update is needed. Remove old apks.
             FileHelpers.delete(mSettingsManager.getApkPath());
 
-            mListener.onUpdateError(new IllegalStateException(AppUpdateCheckerListener.LATEST_VERSION));
+            mListener.onUpToDate(info);
+        }
+    }
+
+    private static List<String> flatten(List<ReleaseNotes> releases) {
+        List<String> lines = new ArrayList<>();
+
+        for (ReleaseNotes release : releases) {
+            lines.addAll(release.lines);
+        }
+
+        return lines;
+    }
+
+    @SuppressWarnings("deprecation")
+    private int getInstalledVersionCode() {
+        try {
+            return mContext.getPackageManager().getPackageInfo(mContext.getPackageName(), 0).versionCode;
+        } catch (NameNotFoundException e) {
+            return 0;
         }
     }
 
@@ -169,6 +266,9 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
     @Override
     public void onApkDownloaded(String path) {
         if (!checkApk(path, mLatestVersionNumber)) {
+            // NEWTUBE(update-flow): used to return silently, leaving whoever asked waiting forever
+            FileHelpers.delete(path);
+            mListener.onDownloadError(new IllegalStateException("The downloaded file is not NewTube " + mLatestVersionName));
             return;
         }
 
@@ -211,7 +311,12 @@ public class AppUpdateChecker implements AppVersionCheckerListener, AppDownloade
 
     @Override
     public void onDownloadError(Exception e) {
-        mListener.onUpdateError(e);
+        mListener.onDownloadError(e);
+    }
+
+    @Override
+    public void onDownloadProgress(long bytes, long total) {
+        mListener.onDownloadProgress(bytes, total > 0 ? total : mDownloadSize);
     }
 
     @Override

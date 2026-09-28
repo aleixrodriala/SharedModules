@@ -9,6 +9,8 @@ import com.liskovsoft.sharedutils.helpers.FileHelpers;
 import com.liskovsoft.sharedutils.helpers.MessageHelpers;
 import com.liskovsoft.sharedutils.mylogger.Log;
 import com.liskovsoft.sharedutils.okhttp.OkHttpManager;
+import okhttp3.Call;
+import okhttp3.Headers;
 import okhttp3.Interceptor;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -95,7 +97,23 @@ public final class DownloadManager {
 
         Log.d(TAG, "Starting download %s...", url);
 
-        Response response = OkHttpManager.instance().doRequest(url, mClient, mHeaders);
+        // NEWTUBE(update-flow): the Call is kept on the request so the user's Cancel aborts the
+        // transfer at once (OkHttpManager.doRequest, used before, never exposed it).
+        Request request = new Request.Builder()
+                .url(url)
+                .headers(Headers.of(mHeaders))
+                .build();
+        Call call = mClient.newCall(request);
+        mRequest.attach(call);
+
+        Response response;
+
+        try {
+            response = call.execute();
+        } catch (IOException ex) {
+            Log.e(TAG, ex.getMessage()); // network error
+            throw new IllegalStateException("Interrupted OkHttp request to " + url, ex);
+        }
 
         if (response == null || response.body() == null) {
             throw new IllegalStateException("Error: bad response");
@@ -495,6 +513,8 @@ public final class DownloadManager {
         private Uri mDestinationUri;
         private ProgressListener mProgressListener;
         private volatile boolean mAllowMetered = true;
+        private volatile Call mCall;
+        private volatile boolean mCancelled;
 
         public MyRequest(Uri uri) {
             mDownloadUri = uri;
@@ -518,6 +538,22 @@ public final class DownloadManager {
 
         public void setProgressListener(ProgressListener listener) {
             mProgressListener = listener;
+        }
+
+        /** NEWTUBE(update-flow): aborts the transfer from any thread; reads then fail. */
+        public void cancel() {
+            mCancelled = true;
+            Call call = mCall;
+            if (call != null) {
+                call.cancel();
+            }
+        }
+
+        void attach(Call call) {
+            mCall = call;
+            if (mCancelled) {
+                call.cancel();
+            }
         }
     }
 }
