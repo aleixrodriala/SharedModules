@@ -33,24 +33,37 @@ public class LocaleContextWrapper extends ContextWrapper {
             return context;
         }
 
-        Configuration configuration = res.getConfiguration();
+        if (VERSION.SDK_INT >= 17) {
+            // NEWTUBE(issue #17): an override of the locale only. createConfigurationContext keeps
+            // every defined field of its argument for the context's whole life, so the full copy of
+            // the current configuration this used to pass froze the orientation and screen size the
+            // activity was created with: a player that rotated in place (configChanges) still read
+            // portrait, padded and sized its landscape video like the portrait box. An empty
+            // Configuration leaves the rest UNDEFINED, which follows the system. fontScale is
+            // cleared because Android 7's constructor sets it to 1.
+            Configuration override = new Configuration();
+            override.fontScale = 0;
 
-        if (customMetrics != null) {
-            configuration.densityDpi = (int) (customMetrics.density * 160); // 160 is the baseline DPI
-        }
+            if (customMetrics != null) {
+                override.densityDpi = (int) (customMetrics.density * 160); // 160 is the baseline DPI
+            }
 
-        if (VERSION.SDK_INT >= 24) {
-            configuration.setLocale(newLocale);
+            if (VERSION.SDK_INT >= 24) {
+                LocaleList localeList = new LocaleList(newLocale);
+                LocaleList.setDefault(localeList);
+                override.setLocales(localeList);
+            } else {
+                override.setLocale(newLocale);
+            }
 
-            LocaleList localeList = new LocaleList(newLocale);
-            LocaleList.setDefault(localeList);
-            configuration.setLocales(localeList);
-
-            context = context.createConfigurationContext(configuration);
-        } else if (VERSION.SDK_INT >= 17) {
-            configuration.setLocale(newLocale);
-            context = context.createConfigurationContext(configuration);
+            context = context.createConfigurationContext(override);
         } else {
+            Configuration configuration = res.getConfiguration();
+
+            if (customMetrics != null) {
+                configuration.densityDpi = (int) (customMetrics.density * 160); // 160 is the baseline DPI
+            }
+
             configuration.locale = newLocale;
             res.updateConfiguration(configuration, res.getDisplayMetrics());
         }
