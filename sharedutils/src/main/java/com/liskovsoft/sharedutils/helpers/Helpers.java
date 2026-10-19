@@ -696,10 +696,8 @@ public final class Helpers {
             activity.getWindow().setFlags(LayoutParams.FLAG_TRANSLUCENT_NAVIGATION, LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         }
 
-        if (hasNotch(activity)) {
-            // Use space of phone's display cutout/notch area
-            activity.getWindow().getAttributes().layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        }
+        // NEWTUBE(cutout): no layoutInDisplayCutoutMode here (upstream 183daf5 forced SHORT_EDGES).
+        // The phone player sets the mode itself (ALWAYS on API 30+) right before calling this.
     }
 
     private static boolean hasNotch(Context context) {
