@@ -271,8 +271,13 @@ final class OkHttpCommons {
             // Create an ssl socket factory with our all-trusting manager
             final SSLSocketFactory sslSocketFactory = new Tls12SocketFactory(sslContext.getSocketFactory());
 
-            //builder.sslSocketFactory(sslSocketFactory, (X509TrustManager)trustAllCerts[0]);
-            builder.sslSocketFactory(sslSocketFactory);
+            // NEWTUBE(api24): pass the trust manager explicitly. Since OkHttp 4/5 the one-arg
+            // sslSocketFactory(factory) stores the factory and THEN throws "Unable to extract the
+            // trust manager" (Tls12SocketFactory is a wrapper it cannot introspect); the catch below
+            // swallowed that, leaving a builder with a factory but no certificate chain cleaner, so
+            // build() hit a NullPointerException in OkHttpClient.<init> and the app died in
+            // Application.onCreate on every Android 7.0 device (issue #78). OkHttp 3.12 tolerated it.
+            builder.sslSocketFactory(sslSocketFactory, (X509TrustManager) trustAllCerts[0]);
             //builder.hostnameVerifier((hostname, session) -> true);
         } catch (Exception e) {
             Log.w(TAG, "Exception while configuring IgnoreSslCertificate: " + e, e);
