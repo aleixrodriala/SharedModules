@@ -321,7 +321,7 @@ final class OkHttpCommons {
                     break;
             }
         }
-        //setupProxy(okBuilder); // proxy configured in system props
+        setupProxy(okBuilder); // proxy configured in system props
         setupConnectionFix(okBuilder);
         setupConnectionParams(okBuilder);
         configureToIgnoreCertificate(okBuilder);

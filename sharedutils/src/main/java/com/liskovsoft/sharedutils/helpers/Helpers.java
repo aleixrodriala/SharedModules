@@ -108,6 +108,9 @@ public final class Helpers {
     private static final Map<String, Pattern> SPLIT_PATTERNS = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int SPLIT_PATTERNS_MAX = 64;
     private static Random sRandom;
+    private static Boolean sIsAndroidTVLauncher;
+    private static Boolean sIsAmazonFireTVDevice;
+    private static Boolean sIsAndroidAuto;
     // https://unicode-table.com/en/
     // https://www.compart.com/en/unicode/
     public static final String THUMB_UP = "\uD83D\uDC4D";
@@ -537,10 +540,19 @@ public final class Helpers {
     }
 
     public static boolean isAndroidTVLauncher(Context context) {
-        return  isPackageExists(context, "com.amazon.tv.leanbacklauncher") || // port of the official Android TV launcher (https://github.com/tsynik/LeanbackLauncher)
-                isPackageExists(context, "com.google.android.leanbacklauncher") ||
-                isPackageExists(context, "com.google.android.tvlauncher") || // Android TV 10
-                isPackageExists(context, "com.google.android.apps.tv.launcherx"); // Google TV Home
+        if (sIsAndroidTVLauncher != null) {
+            return sIsAndroidTVLauncher;
+        }
+
+        sIsAndroidTVLauncher =
+                isPackageExists(context, "com.amazon.tv.leanbacklauncher") // port of the official Android TV launcher (https://github.com/tsynik/LeanbackLauncher)
+            ||  isPackageExists(context, "com.google.android.leanbacklauncher")
+            ||  isPackageExists(context, "com.google.android.tvlauncher") // Android TV 10
+            ||  isPackageExists(context, "com.google.android.apps.tv.launcherx") // Google TV Home
+            ||  isPackageExists(context, "com.spocky.projengmenu") // Projectivity launcher
+            ||  isPackageExists(context, "com.tv.leanback.launcher"); // custom vendor tv launcher
+
+        return sIsAndroidTVLauncher;
     }
 
     public static boolean isGoogleTVLauncher(Context context) {
@@ -588,6 +600,16 @@ public final class Helpers {
 
         return (pm.hasSystemFeature(PackageManager.FEATURE_TELEVISION)
                 || pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK));
+    }
+
+    public static boolean isAndroidAuto() {
+        if (sIsAndroidAuto != null) {
+            return sIsAndroidAuto;
+        }
+
+        sIsAndroidAuto = Helpers.equalsAny(Helpers.getDeviceName(), "rkpx3 (rkpx3)");
+
+        return sIsAndroidAuto;
     }
 
     public static String findFirst(String input, Pattern pattern) {
@@ -647,7 +669,7 @@ public final class Helpers {
      * More advance approach. Including automobile systems support.
      */
     public static void makeActivityFullscreen2(Activity activity) {
-        if (Build.VERSION.SDK_INT >= 30) {
+        if (VERSION.SDK_INT >= 30) {
             activity.getWindow().setDecorFitsSystemWindows(false);
             WindowInsetsController controller = activity.getWindow().getInsetsController();
             // https://developer.android.com/codelabs/gesture-navigation
@@ -662,7 +684,7 @@ public final class Helpers {
             // Keep navigation bar in gesture mode to support gestures???
             //int hideNavigation = isEdgeToEdgeEnabled(activity) != 2 ? (View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION) : 0;
             int hideNavigation = View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
-            int sticky = Build.VERSION.SDK_INT >= 19 ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY : 0;
+            int sticky = VERSION.SDK_INT >= 19 ? View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY : 0;
             activity.getWindow().getDecorView().setSystemUiVisibility(hideNavigation | sticky | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_FULLSCREEN);
         }
 
@@ -673,6 +695,28 @@ public final class Helpers {
             activity.getWindow().setFlags(LayoutParams.FLAG_TRANSLUCENT_STATUS, LayoutParams.FLAG_TRANSLUCENT_STATUS);
             activity.getWindow().setFlags(LayoutParams.FLAG_TRANSLUCENT_NAVIGATION, LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         }
+
+        if (hasNotch(activity)) {
+            // Use space of phone's display cutout/notch area
+            activity.getWindow().getAttributes().layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+    }
+
+    private static boolean hasNotch(Context context) {
+        return VERSION.SDK_INT >= 30
+                && context.getDisplay() != null
+                && context.getDisplay().getCutout() != null;
+    }
+
+    /**
+     * Take into the account screen cutout/notch area<br/>
+     * NOTE: the notch available since api 28 but the detection of since 30 (see hasNotch)<br/>
+     * So, we change cutout detection from 28 to 30
+     */
+    public static boolean isCutoutMode(Context context) {
+        return VERSION.SDK_INT >= 30 && context instanceof Activity
+                && ((Activity) context).getWindow().getAttributes().layoutInDisplayCutoutMode
+                == LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
     }
 
     public static void addFullscreenListener(Activity activity) {
@@ -1014,10 +1058,16 @@ public final class Helpers {
      * @return {@code true} true if device is Amazon Fire TV device.
      */
     public static boolean isAmazonFireTVDevice() {
+        if (sIsAmazonFireTVDevice != null) {
+            return sIsAmazonFireTVDevice;
+        }
+
         String deviceName = Build.MODEL;
         String manufacturerName = Build.MANUFACTURER;
-        return (deviceName.startsWith("AFT")
+        sIsAmazonFireTVDevice = (deviceName.startsWith("AFT")
                 && "Amazon".equalsIgnoreCase(manufacturerName));
+
+        return sIsAmazonFireTVDevice;
     }
 
     public static boolean isActivityExists(Intent intent, Context context) {
@@ -2365,5 +2415,56 @@ public final class Helpers {
         }
 
         return result;
+    }
+
+    public static <T> void move(T[] array, int from, int to) {
+        if (from < 0 || to < 0) {
+            return;
+        }
+
+        if (from == to) {
+            return;
+        }
+
+        T item = array[from];
+
+        if (from < to) {
+            System.arraycopy(array, from + 1, array, from, to - from);
+        } else {
+            System.arraycopy(array, to, array, to + 1, from - to);
+        }
+
+        array[to] = item;
+    }
+
+    public static int compareToIgnoreCase(String name1, String name2) {
+        if (name1 == null && name2 == null) {
+            return 0;
+        }
+        if (name1 == null) {
+            return -1; // nulls first
+        }
+        if (name2 == null) {
+            return 1;
+        }
+        return name1.compareToIgnoreCase(name2);
+    }
+
+    public static boolean isNullOrEmpty(Collection<?> collection) {
+        return collection == null || collection.isEmpty();
+    }
+
+    public static boolean containsIgnoreCase(@NonNull Collection<String> collection, String value) {
+        if (value == null) {
+            return false;
+        }
+
+        for (String item : collection) {
+            if (value.equalsIgnoreCase(item)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
